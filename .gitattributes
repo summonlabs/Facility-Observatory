@@ -1,0 +1,24 @@
+# Normalise line endings in the repository index; check out native on Windows.
+* text=auto eol=lf
+
+*.cpp   text eol=lf
+*.hpp   text eol=lf
+*.h     text eol=lf
+*.c     text eol=lf
+*.txt   text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.yml   text eol=lf
+
+*.sln    text eol=crlf
+*.vcxproj text eol=crlf
+
+# Binary artefacts
+*.png binary
+*.jpg binary
+*.pdf binary
+
+# Keep the vendored licence text byte-exact.
+LICENSE text eol=lf -diff
