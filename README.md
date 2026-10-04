@@ -1,6 +1,6 @@
 # Facility Observatory
 
-A read-only evidence observatory for Data Center Control Plane facility state.
+A read-only evidence observatory for facility state.
 
 Facility Observatory records what adjacent facility authorities publish, keeps
 their disagreements intact, and answers one question deterministically and with
