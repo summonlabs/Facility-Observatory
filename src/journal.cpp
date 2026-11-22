@@ -548,6 +548,11 @@ AppendResult Journal::append_raw(JournalRecordType type, const std::uint8_t* pay
     result.detail = "the journal was opened read-only and refuses every append";
     return result;
   }
+  if (append_failed_) {
+    result.code = ReasonCode::journal_commit_failed;
+    result.detail = "an earlier append to this journal failed; reopen the journal before appending to it again";
+    return result;
+  }
   if (!at.is_set()) {
     result.code = ReasonCode::indeterminate;
     result.detail = "a journal append requires a set commit instant";
@@ -586,8 +591,16 @@ AppendResult Journal::append_raw(JournalRecordType type, const std::uint8_t* pay
   const std::size_t crc_offset = kPreambleBytes + size;
   store_u32(frame.data() + crc_offset, crc32c(frame.data(), crc_offset));
 
+  // A failed write may have left part of the frame in the file, and a failed
+  // commit leaves a frame the device never confirmed. Appending after either
+  // would put a valid frame behind a damaged one (interior corruption, which an
+  // open refuses) or repeat this sequence number. The file is cut back to its
+  // last good size and the journal refuses appends until it is opened again,
+  // which verifies what the file holds.
   auto written = file_.append(frame.data(), frame.size());
   if (!written) {
+    append_failed_ = true;
+    (void)file_.truncate(valid_bytes_);
     result.code = written.code();
     result.detail = written.reason().detail;
     return result;
@@ -595,6 +608,8 @@ AppendResult Journal::append_raw(JournalRecordType type, const std::uint8_t* pay
   if (commit_on_append_) {
     auto committed = file_.commit();
     if (!committed) {
+      append_failed_ = true;
+      (void)file_.truncate(valid_bytes_);
       result.code = ReasonCode::journal_commit_failed;
       result.detail = committed.reason().detail;
       return result;

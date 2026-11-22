@@ -158,6 +158,9 @@ class FO_API Journal {
   std::size_t max_records_{1000000};
   bool commit_on_append_{true};
   bool read_only_{false};
+  // Set by an append that failed while writing or committing its frame. The
+  // journal then refuses appends until it is opened again.
+  bool append_failed_{false};
 };
 
 }  // namespace fo

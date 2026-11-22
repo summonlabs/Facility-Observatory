@@ -8,6 +8,16 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include "facility_observatory/integrity.hpp"
 #include "facility_observatory/journal.hpp"
 #include "facility_observatory/observatory.hpp"
@@ -286,6 +296,70 @@ FO_TEST(journal_refuses_to_truncate_when_told_not_to) {
   FO_REQUIRE(journal.code() == ReasonCode::journal_torn_tail);
   FO_REQUIRE(read_bytes(path) == torn);
 }
+
+#if defined(_WIN32)
+// A failed append can leave part of a frame, or a frame the device never
+// confirmed, behind the committed ones. A frame appended after such a tail
+// would be a valid frame behind a damaged one (interior corruption, which an
+// open refuses) or would repeat a sequence number. The journal therefore cuts
+// the file back to its committed size and refuses appends until it is opened
+// again. The failure is produced the way another program can produce it: a
+// byte-range lock on the region the next frame is written to.
+FO_TEST(journal_refuses_appends_after_a_failed_append_until_reopened) {
+  TempDir directory;
+  const std::string path = directory.file("failed-append.foj");
+  build_journal(path, 2);
+  const std::size_t committed = read_bytes(path).size();
+  const EvidenceRecord record =
+      make_evidence("dccp-a", "telemetry", "rack:r1", "power.draw", 1, 3, 1, "3", "watts", 100);
+
+  {
+    JournalOptions options;
+    options.path = path;
+    auto journal = Journal::open(options);
+    FO_REQUIRE(journal.has_value());
+    FO_REQUIRE_EQ(journal.value().next_sequence().value(), 4);
+
+    const HANDLE other = CreateFileA(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    FO_REQUIRE(other != INVALID_HANDLE_VALUE);
+    OVERLAPPED range{};
+    range.Offset = static_cast<DWORD>(committed);
+    const BOOL locked =
+        LockFileEx(other, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY, 0, 1U << 20, 0, &range);
+    ReasonCode failed = ReasonCode::ok;
+    if (locked != 0) {
+      failed = journal.value().append_evidence(record, at_seconds(200)).code;
+      (void)UnlockFileEx(other, 0, 1U << 20, 0, &range);
+    }
+    CloseHandle(other);
+    FO_REQUIRE(locked != 0);
+    FO_REQUIRE(failed != ReasonCode::ok);
+    FO_REQUIRE_EQ(journal.value().next_sequence().value(), 4);
+
+    // The lock is gone, and the journal still refuses: it does not go on
+    // appending behind an append whose outcome it could not confirm.
+    const AppendResult refused = journal.value().append_evidence(record, at_seconds(201));
+    FO_REQUIRE(refused.code == ReasonCode::journal_commit_failed);
+    FO_REQUIRE(!refused.detail.empty());
+    FO_REQUIRE_EQ(journal.value().next_sequence().value(), 4);
+    FO_REQUIRE_EQ(journal.value().records().size(), 3);
+    journal.value().close();
+  }
+  FO_REQUIRE_EQ(read_bytes(path).size(), committed);
+
+  JournalOptions options;
+  options.path = path;
+  auto reopened = Journal::open(options);
+  FO_REQUIRE(reopened.has_value());
+  FO_REQUIRE(reopened.value().recovery().clean);
+  FO_REQUIRE_EQ(reopened.value().recovery().record_count, 3);
+  const AppendResult appended = reopened.value().append_evidence(record, at_seconds(202));
+  FO_REQUIRE(appended.code == ReasonCode::ok);
+  FO_REQUIRE_EQ(appended.sequence.value(), 4);
+  reopened.value().close();
+}
+#endif
 
 FO_TEST(journal_rejects_interior_corruption) {
   TempDir directory;
