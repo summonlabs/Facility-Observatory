@@ -61,7 +61,11 @@ function(fo_apply_project_options target)
   endif()
   if(FACILITY_OBSERVATORY_ENABLE_ASAN)
     if(MSVC)
-      target_compile_options(${target} PRIVATE /fsanitize=address)
+      # The sanitizer objects carry debug information (C5072 without it), and the
+      # link keeps it and is not incremental: an incremental link of instrumented
+      # objects is refused by the linker with LNK4300.
+      target_compile_options(${target} PRIVATE /fsanitize=address /Zi)
+      target_link_options(${target} PRIVATE /INCREMENTAL:NO /DEBUG)
     else()
       target_compile_options(${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
       target_link_options(${target} PRIVATE -fsanitize=address)
